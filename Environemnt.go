@@ -49,6 +49,8 @@ type Environment struct {
 // 构造函数
 
 var Environments map[string]*Environment = make(map[string]*Environment)
+var DatabasePath = "./ygopro-data/ygopro-database/locales/"
+var LuaPath = "./ygopro-data/Constant.lua"
 
 func GetEnvironment(locale string) *Environment {
 	if environment, has := Environments[locale]; has {
@@ -63,7 +65,7 @@ func newEnvironment(locale string) (environment *Environment) {
 	environment.dbs = searchCdb(locale)
 	environment.Cards = make(map[int]Card)
 	environment.Locale = locale
-	environment.loadStringsFile(filepath.Join("./ygopro-data/ygopro-database/locales/", locale, "strings.conf"))
+	environment.loadStringsFile(filepath.Join(DatabasePath, locale, "strings.conf"))
 	environment.linkStringsAndConstants()
 	environment.linkSetNameToSQL()
 	Environments[locale] = environment
@@ -76,7 +78,7 @@ var raceConstants []property = make([]property, 0, 40)
 var typeConstants []property = make([]property, 0, 40)
 
 func InitializeStaticEnvironment() {
-	loadLuaFile("./ygopro-data/Constant.lua")
+	loadLuaFile(LuaPath)
 	// register_methods
 }
 
@@ -216,7 +218,7 @@ func (environment *Environment) linkStringsAndConstantsPattern(strings []string,
 
 // 建立 SQL 连接
 func searchCdb(locale string) []*sql.DB {
-	if dbPath, err := filepath.Glob(filepath.Join("./ygopro-data/ygopro-database/locales/", locale, "/*.cdb")); err != nil {
+	if dbPath, err := filepath.Glob(filepath.Join(DatabasePath, locale, "/*.cdb")); err != nil {
 		return nil
 	} else {
 		dbs := make([]*sql.DB, 0)
