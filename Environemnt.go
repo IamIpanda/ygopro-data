@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"os"
 )
 
 // SQL 卡片查询指令
@@ -49,8 +50,8 @@ type Environment struct {
 // 构造函数
 
 var Environments map[string]*Environment = make(map[string]*Environment)
-var DatabasePath = "./ygopro-data/ygopro-database/locales/"
-var LuaPath = "./ygopro-data/Constant.lua"
+var DatabasePath = filepath.Join(os.Getenv("GOPATH"), "src/github.com/iamipanda/ygopro-data/ygopro-database/locales/")
+var LuaPath = filepath.Join(os.Getenv("GOPATH"), "src/github.com/iamipanda/ygopro-data/Constant.lua")
 
 func GetEnvironment(locale string) *Environment {
 	if environment, has := Environments[locale]; has {
