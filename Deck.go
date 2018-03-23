@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"bytes"
+	"io"
 )
 
 const DECK_FILE_HEAD = "#created by lib"
@@ -37,6 +39,24 @@ func (deck Deck) SaveYdk(filename string) {
 	for _, id := range deck.Ex {
 		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
 	}
+}
+
+func (deck Deck) ToYdk() string {
+	var writer bytes.Buffer
+	writer.WriteString(DECK_FILE_HEAD + DECK_FILE_NEWLINE)
+	writer.WriteString(DECK_FILE_MAIN_FLAG + DECK_FILE_NEWLINE)
+	for _, id := range deck.Main {
+		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
+	}
+	writer.WriteString(DECK_FILE_SIDE_FLAG + DECK_FILE_NEWLINE)
+	for _, id := range deck.Side {
+		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
+	}
+	writer.WriteString(DECK_FILE_EX_FLAG + DECK_FILE_NEWLINE)
+	for _, id := range deck.Ex {
+		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
+	}
+	return writer.String()
 }
 
 func LoadYdk(filename string) Deck {
