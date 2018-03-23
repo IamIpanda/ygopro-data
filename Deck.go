@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"bytes"
-	"io"
 )
 
 const DECK_FILE_HEAD = "#created by lib"
