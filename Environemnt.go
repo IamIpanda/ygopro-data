@@ -250,7 +250,7 @@ func (environment *Environment) linkSetNameToSQL() {
 
 func getIdsBySetCode(db *sql.DB, setCode int64) []int {
 	var sqlQuery string
-	if setCode < 0xFF {
+	if setCode < 0xFFF {
 		sqlQuery = QUERY_SET_SQL
 	} else {
 		sqlQuery = QUERY_SUBSET_SQL
