@@ -143,3 +143,18 @@ func (deck *Deck) SeparateExFromMain(environment *Environment) {
 	deck.Main = newMain
 	deck.Ex = newEx
 }
+
+func (deck *Deck) SeparateExFromMainFromCache(environment *Environment) {
+	var newMain, newEx []int
+	for _, id := range deck.Main {
+		if card, exist := environment.Cards[id]; exist {
+			if card.IsEx() {
+				newEx = append(newEx, id)
+			} else {
+				newMain = append(newMain, id)
+			}
+		}
+	}
+	deck.Main = newMain
+	deck.Ex = newEx
+}

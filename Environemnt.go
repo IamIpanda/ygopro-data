@@ -288,6 +288,7 @@ func (environment *Environment) GetNamedCard(name string) (Card, bool) {
 			rows.Scan(&id)
 			return environment.GetCard(id)
 		}
+		rows.Close()
 	}
 	for _, db := range environment.dbs {
 		rows, _ := db.Query(SEARCH_NAME_SQL, "%"+name+"%")
@@ -297,6 +298,7 @@ func (environment *Environment) GetNamedCard(name string) (Card, bool) {
 			rows.Scan(&id)
 			return environment.GetCard(id)
 		}
+		rows.Close()
 	}
 	return Card{}, false
 }
