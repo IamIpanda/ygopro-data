@@ -359,6 +359,12 @@ func (environment *Environment) LoadAllCards() {
 	}
 }
 
+func (environment *Environment)LoadAllEnvironmentCards() {
+	for _, environment := range Environments {
+		environment.LoadAllCards()
+	}
+}
+
 // property query
 
 func (property *property) IsAttribute(card Card) bool {
