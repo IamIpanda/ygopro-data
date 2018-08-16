@@ -359,7 +359,7 @@ func (environment *Environment) LoadAllCards() {
 	}
 }
 
-func (environment *Environment)LoadAllEnvironmentCards() {
+func LoadAllEnvironmentCards() {
 	for _, environment := range Environments {
 		environment.LoadAllCards()
 	}
