@@ -158,3 +158,36 @@ func (deck *Deck) SeparateExFromMainFromCache(environment *Environment) {
 	deck.Main = newMain
 	deck.Ex = newEx
 }
+
+func (deck *Deck) RemoveAlias(environment *Environment) {
+	removePackAlias(deck.Main, environment)
+	removePackAlias(deck.Side, environment)
+	removePackAlias(deck.Ex, environment)
+}
+
+func removePackAlias(pack []int, environment *Environment) {
+	for index, id := range pack {
+		if card, exist := environment.GetCard(id); exist {
+			if card.IsAlias() {
+				pack[index] = card.Alias
+			}
+		}
+	}
+}
+
+func (deck *Deck) RemoveAliasFromCache(environment *Environment) {
+	removePackAliasFromCache(deck.Main, environment)
+	removePackAliasFromCache(deck.Side, environment)
+	removePackAliasFromCache(deck.Ex, environment)
+}
+
+func removePackAliasFromCache(pack []int, environment *Environment)  {
+	for index, id := range pack {
+		if card, exist := environment.Cards[id]; exist {
+			if card.IsAlias() {
+				pack[index] = card.Alias
+			}
+		}
+	}
+}
+

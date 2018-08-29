@@ -306,11 +306,17 @@ func (environment *Environment) GetNamedCard(name string) (Card, bool) {
 func (environment *Environment) GetNamedCardCached(name string) (Card, bool) {
 	for _, card := range environment.Cards {
 		if card.Name == name {
+			if card.Alias > 0 {
+				return environment.GetCard(card.Alias)
+			}
 			return card, true
 		}
 	}
 	for _, card := range environment.Cards {
 		if strings.Contains(card.Name, name) {
+			if card.Alias > 0 {
+				return environment.GetCard(card.Alias)
+			}
 			return card, true
 		}
 	}
