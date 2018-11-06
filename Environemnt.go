@@ -255,7 +255,7 @@ func getIdsBySetCode(db *sql.DB, setCode int64) []int {
 	} else {
 		sqlQuery = QUERY_SUBSET_SQL
 	}
-	rows, _ := db.Query(sqlQuery, setCode, setCode<<8, setCode<<16, setCode<<24)
+	rows, _ := db.Query(sqlQuery, setCode, setCode<<16, setCode<<32, setCode<<48)
 	var ids []int
 	var id int
 	for rows.Next() {
