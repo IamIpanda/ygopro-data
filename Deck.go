@@ -12,7 +12,7 @@ import (
 const DECK_FILE_HEAD = "#created by lib"
 const DECK_FILE_MAIN_FLAG = "#main"
 const DECK_FILE_EX_FLAG = "#extra"
-const DECK_FILE_SIDE_FLAG = "!Side"
+const DECK_FILE_SIDE_FLAG = "!side"
 const DECK_FILE_NEWLINE = "\n"
 
 type Deck struct {
