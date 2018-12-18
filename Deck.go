@@ -77,6 +77,7 @@ func LoadYdkFromString(string string) Deck {
 	string = strings.Replace(string, "\r", "", -1)
 	lines := strings.Split(string, "\n")
 	deck := Deck{}
+	deck.focus = &deck.Main
 	for _, line := range lines {
 		deck.loadYdkLine(line)
 	}
@@ -84,19 +85,22 @@ func LoadYdkFromString(string string) Deck {
 }
 
 func (deck *Deck) loadYdkLine(text string) {
-	deck.focus = &deck.Main
 	switch {
-	case strings.HasPrefix(text, "#"):
-		return
 	case text == DECK_FILE_MAIN_FLAG:
 		deck.focus = &deck.Main
 	case text == DECK_FILE_SIDE_FLAG:
 		deck.focus = &deck.Side
 	case text == DECK_FILE_EX_FLAG:
 		deck.focus = &deck.Ex
+	case strings.HasPrefix(text, "#"):
+		return
 	default:
-		value, _ := strconv.ParseInt(text, 10, 32)
-		*deck.focus = append(*deck.focus, int(value))
+		value, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "unknown ydk line:", text, "error:", err)
+		} else {
+			*deck.focus = append(*deck.focus, int(value))
+		}
 	}
 }
 
