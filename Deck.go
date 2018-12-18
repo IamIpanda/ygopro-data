@@ -94,6 +94,8 @@ func (deck *Deck) loadYdkLine(text string) {
 		deck.focus = &deck.Ex
 	case strings.HasPrefix(text, "#"):
 		return
+	case len(text) == 0:
+		return
 	default:
 		value, err := strconv.ParseInt(text, 10, 32)
 		if err != nil {
