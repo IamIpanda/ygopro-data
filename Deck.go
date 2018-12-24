@@ -136,7 +136,8 @@ func classifyPack(pack []int) map[int]int {
 }
 
 func (deck *Deck) SeparateExFromMain(environment *Environment) {
-	var newMain, newEx []int
+	var newMain []int
+	newEx := deck.Ex[0:]
 	for _, id := range deck.Main {
 		if card, exist := environment.GetCard(id); exist {
 			if card.IsEx() {
