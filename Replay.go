@@ -1,22 +1,34 @@
 package ygopro_data
 
 import (
+	"bytes"
 	"encoding/binary"
-	"github.com/itchio/lzma"
-	"io/ioutil"
-	"strings"
+	"fmt"
+	"io"
+	"os"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/ulikunitz/xz/lzma"
 )
 
 const REPLAY_COMPRESSED_FLAG = 1
 const REPLAY_TAG_FLAG = 2
 const REPLAY_DECIDED_FLAG = 4
+const REPLAY_SINGLE_MODE_FLAG = 8
+const REPLAY_UNIFORM_FLAG = 16
+
+const REPLAY_ID_YRP1 = 0x31707279
+const REPLAY_ID_YRP2 = 0x32707279
 
 type ReplayHeader struct {
 	id, version, flag, seed, hash uint32
 	dataSizeRaw                   [4]byte
 	props                         [8]byte
+	// Extended header fields
+	seedSequence           [8]uint32
+	headerVersion          uint32
+	value1, value2, value3 uint32
 }
 
 func (header *ReplayHeader) getLzmaHeader() []byte {
@@ -51,44 +63,102 @@ type Replay struct {
 	Responses [][]byte
 }
 
-func ReadReplayFromFile(filename string) *Replay {
+func ReadReplayFromFile(filename string) (*Replay, error) {
 	replay := new(Replay)
-	bytes, err := ioutil.ReadFile(filename)
+	bytes, err := os.ReadFile(filename)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read replay failed: %w", err)
+	}
+	headerLength := 32
+	if len(bytes) < headerLength {
+		return nil, fmt.Errorf("too short replay header: %s", filename)
 	}
 	replay.header = readReplayHeader(bytes)
+	if replay.header.id != REPLAY_ID_YRP1 && replay.header.id != REPLAY_ID_YRP2 {
+		return nil, fmt.Errorf("unknown replay version: %s", filename)
+	}
+	if replay.header.id == REPLAY_ID_YRP2 {
+		headerLength = 80
+		if len(bytes) < headerLength {
+			return nil, fmt.Errorf("too short replay header: %s", filename)
+		}
+		readReplayHeaderExtended(bytes, replay.header)
+	}
 	var content []byte
 	if replay.header.IsCompressed() {
-		content = readUncompressedData(bytes[32:], replay.header)
-	} else {
-		content = bytes[32:]
-	}
-	pos := 0
-	replay.HostName = readLengthString(content, &pos, 40)
-	if replay.header.IsTag() {
-		replay.TagHostName = readLengthString(content, &pos, 40)
-		replay.TagClientName = readLengthString(content, &pos, 40)
-	}
-	replay.ClientName = readLengthString(content, &pos, 40)
-	replay.StartLP = readInteger(content, &pos)
-	replay.StartHand = readInteger(content, &pos)
-	replay.DrawCount = readInteger(content, &pos)
-	replay.Opt = readInteger(content, &pos)
-	replay.HostDeck = readDeckFromString(content, &pos)
-	if replay.header.IsTag() {
-		replay.TagHostDeck = readDeckFromString(content, &pos)
-		replay.TagClientDeck = readDeckFromString(content, &pos)
-	}
-	replay.ClientDeck = readDeckFromString(content, &pos)
-	for ; pos < len(content); {
-		if data, ok := readResponse(content, &pos); ok {
-			replay.Responses = append(replay.Responses, data)
-		} else {
-			break
+		content, err = readUncompressedData(bytes[headerLength:], replay.header)
+		if err != nil {
+			return nil, fmt.Errorf("uncompress replay failed: %w", err)
 		}
+	} else {
+		content = bytes[headerLength:]
 	}
-	return replay
+	reader := &replayReader{content: content}
+	replay.HostName = reader.str(40)
+	if replay.header.IsTag() {
+		replay.TagHostName = reader.str(40)
+		replay.TagClientName = reader.str(40)
+	}
+	replay.ClientName = reader.str(40)
+	replay.StartLP = reader.integer()
+	replay.StartHand = reader.integer()
+	replay.DrawCount = reader.integer()
+	replay.Opt = reader.integer()
+	replay.HostDeck = reader.deck()
+	if replay.header.IsTag() {
+		replay.TagHostDeck = reader.deck()
+		replay.TagClientDeck = reader.deck()
+	}
+	replay.ClientDeck = reader.deck()
+	for reader.pos < len(content) && reader.err == nil {
+		replay.Responses = append(replay.Responses, reader.response())
+	}
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	return replay, nil
+}
+
+type replayReader struct {
+	content []byte
+	pos     int
+	err     error
+}
+
+func (r *replayReader) str(length int) string {
+	if r.err != nil {
+		return ""
+	}
+	val, err := readLengthString(r.content, &r.pos, length)
+	r.err = err
+	return val
+}
+
+func (r *replayReader) integer() int {
+	if r.err != nil {
+		return 0
+	}
+	val, err := readInteger(r.content, &r.pos)
+	r.err = err
+	return val
+}
+
+func (r *replayReader) deck() Deck {
+	if r.err != nil {
+		return Deck{}
+	}
+	deck, err := readDeckFromString(r.content, &r.pos)
+	r.err = err
+	return deck
+}
+
+func (r *replayReader) response() []byte {
+	if r.err != nil {
+		return nil
+	}
+	data, err := readResponse(r.content, &r.pos)
+	r.err = err
+	return data
 }
 
 func readReplayHeader(str []byte) *ReplayHeader {
@@ -107,44 +177,76 @@ func readReplayHeader(str []byte) *ReplayHeader {
 	return header
 }
 
-func readUncompressedData(str []byte, header *ReplayHeader) []byte {
-	originString := string(header.getLzmaHeader()) + string(str)
-	reader := lzma.NewReader(strings.NewReader(originString))
-	answer, err := ioutil.ReadAll(reader)
-	if err != nil {
-
+func readReplayHeaderExtended(str []byte, header *ReplayHeader) {
+	for i := 0; i < 8; i++ {
+		header.seedSequence[i] = binary.LittleEndian.Uint32(str[32+i*4 : 32+(i+1)*4])
 	}
-	return answer
+	header.headerVersion = binary.LittleEndian.Uint32(str[64:68])
+	header.value1 = binary.LittleEndian.Uint32(str[68:72])
+	header.value2 = binary.LittleEndian.Uint32(str[72:76])
+	header.value3 = binary.LittleEndian.Uint32(str[76:80])
 }
 
-func readInteger(str []byte, index *int) int {
+func readUncompressedData(str []byte, header *ReplayHeader) ([]byte, error) {
+	originBytes := append(header.getLzmaHeader(), str...)
+	reader, err := lzma.NewReader(bytes.NewReader(originBytes))
+	if err != nil {
+		return nil, err
+	}
+	answer, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	return answer, nil
+}
+
+func readInteger(str []byte, index *int) (int, error) {
+	if *index+4 > len(str) {
+		return 0, fmt.Errorf("read integer overflow at %d", *index)
+	}
 	value := binary.LittleEndian.Uint32(str[*index:(*index + 4)])
 	*index += 4
-	return int(value)
+	return int(value), nil
 }
 
-func readDeckFromString(str []byte, index *int) Deck {
+func readDeckFromString(str []byte, index *int) (Deck, error) {
 	deck := Deck{}
-	deck.Main = readDeckPackFromString(str, index)
-	deck.Ex = readDeckPackFromString(str, index)
-	return deck
+	var err error
+	deck.Main, err = readDeckPackFromString(str, index)
+	if err != nil {
+		return Deck{}, err
+	}
+	deck.Ex, err = readDeckPackFromString(str, index)
+	if err != nil {
+		return Deck{}, err
+	}
+	return deck, nil
 }
 
-func readDeckPackFromString(str []byte, index *int) []int {
+func readDeckPackFromString(str []byte, index *int) ([]int, error) {
+	if *index+4 > len(str) {
+		return nil, fmt.Errorf("read deck length overflow at %d", *index)
+	}
 	length := int(binary.LittleEndian.Uint32(str[*index : *index+4]))
 	*index += 4
 	pack := make([]int, length)
 	for i := 0; i < length; i++ {
+		if *index+4 > len(str) {
+			return nil, fmt.Errorf("read deck card overflow at %d", *index)
+		}
 		pack[i] = int(binary.LittleEndian.Uint32(str[(*index):(*index + 4)]))
 		*index += 4
 	}
-	return pack
+	return pack, nil
 }
 
-func readLengthString(str []byte, index *int, length int) string {
+func readLengthString(str []byte, index *int, length int) (string, error) {
+	if *index+length > len(str) {
+		return "", fmt.Errorf("read string overflow at %d", *index)
+	}
 	value := UTF16BytesToString(str[*index:(*index+length)], binary.LittleEndian)
 	*index += length
-	return value
+	return value, nil
 }
 
 func UTF16BytesToString(b []byte, o binary.ByteOrder) string {
@@ -162,14 +264,17 @@ func UTF16BytesToString(b []byte, o binary.ByteOrder) string {
 	return string(utf16.Decode(utf))
 }
 
-func readResponse(str []byte, index *int) ([]byte, bool) {
+func readResponse(str []byte, index *int) ([]byte, error) {
+	if *index >= len(str) {
+		return nil, fmt.Errorf("read response overflow at %d", *index)
+	}
 	length := int(str[*index])
 	*index += 1
-	if length > 64 || *index + length > len(str) {
-		return nil, false
+	if length > 64 || *index+length > len(str) {
+		return nil, fmt.Errorf("invalid response length %d at %d", length, *index)
 	} else {
-		data := str[(*index):(*index+length)]
+		data := str[(*index):(*index + length)]
 		*index += length
-		return data, true
+		return data, nil
 	}
 }

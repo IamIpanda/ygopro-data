@@ -2,15 +2,15 @@ package ygopro_data
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
-	"io/ioutil"
-	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"os"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // SQL 卡片查询指令
@@ -25,14 +25,24 @@ const QUERY_SUBSET_SQL = "select Id from datas where (Setcode & 0x000000000000FF
 const SEARCH_NAME_ACCURATE_SQL = "select id from texts where name == (?)"
 const SEARCH_NAME_SQL = "select id from texts where name like (?)"
 
-type property struct {
+// Property represents a named constant loaded from the lua constants file.
+// It maps a human-readable name (e.g. "dark", "spellcaster") to its integer bitmask value.
+// Use IsAttribute, IsRace, and IsType on Card values to test membership.
+type Property struct {
 	name   string
 	text   string
 	value  int64
 	locale string
 }
 
+// Environment provides locale-specific card data, strings, and constants for a
+// single language region (e.g. "zh-CN", "en-US"). It reads from .cdb databases
+// and a strings.conf file located under a locale directory.
+//
+// Use GetEnvironment or LoadEnvironment to obtain an instance.
 type Environment struct {
+	// Cards is a cache of card data keyed by card ID. Populate with LoadAllCards
+	// or lazily via GetCard.
 	Cards  map[int]Card
 	Locale string
 	dbs    []*sql.DB
@@ -41,128 +51,188 @@ type Environment struct {
 	raceNames      []string
 	typeNames      []string
 
-	Attributes map[string]property
-	Races      map[string]property
-	Types      map[string]property
-	Sets       []Set
+	// Attributes maps lowercase attribute names (e.g. "dark", "light") to Property values.
+	Attributes map[string]Property
+	// Races maps lowercase race names (e.g. "spellcaster", "dragon") to Property values.
+	Races map[string]Property
+	// Types maps lowercase type names (e.g. "synchro", "pendulum") to Property values.
+	Types map[string]Property
+	// Sets holds all set/series definitions for this locale, with card IDs populated.
+	Sets []Set
 }
 
-// 构造函数
-
+// Environments stores all loaded Environment instances keyed by locale string.
+// Use GetEnvironment to retrieve or lazily create an entry.
 var Environments map[string]*Environment = make(map[string]*Environment)
-var DatabasePath = filepath.Join(os.Getenv("GOPATH"), "src/github.com/iamipanda/ygopro-data/ygopro-database/locales/")
-var LuaPath = filepath.Join(os.Getenv("GOPATH"), "src/github.com/iamipanda/ygopro-data/Constant.lua")
 
+// Should point to a ygopro-database path. If set, GetEnvironment will auto try locales in that folder.
+var DatabasePath string
+
+// GetEnvironment returns the Environment for the given locale, creating it on first access.
+// It panics if LoadLuaFile has not been called first, or if DatabasePath is not set.
 func GetEnvironment(locale string) *Environment {
-	if environment, has := Environments[locale]; has {
-		return environment
-	} else {
-		return newEnvironment(locale)
+	if !luaLoaded {
+		panic(errors.New("environment is not initialized with a lua file, call LoadLuaFile() first"))
 	}
+
+	environment, has := Environments[locale]
+	if has {
+		return environment
+	}
+
+	if DatabasePath != "" {
+		environment, err := LoadEnvironment(filepath.Join(DatabasePath, "locales", locale), locale)
+		if err != nil {
+			panic(err)
+		}
+		return environment
+	}
+	return nil
 }
 
-func newEnvironment(locale string) (environment *Environment) {
-	environment = new(Environment)
-	environment.dbs = searchCdb(locale)
+// LoadEnvironment creates a new Environment from the given locale directory.
+//
+// path is the full path to the locale directory containing .cdb databases and
+// a strings.conf file (e.g. "/ygopro-database/locales/zh-CN").
+// locale is the locale identifier (e.g. "zh-CN", "en-US").
+//
+// The returned Environment is registered in the global Environments map.
+func LoadEnvironment(path string, locale string) (*Environment, error) {
+	environment := new(Environment)
+	dbs, err := searchCdb(path)
+	if err != nil {
+		return nil, err
+	}
+	environment.dbs = dbs
 	environment.Cards = make(map[int]Card)
 	environment.Locale = locale
-	environment.loadStringsFile(filepath.Join(DatabasePath, locale, "strings.conf"))
+	if err := environment.loadStringsFile(filepath.Join(path, "strings.conf")); err != nil {
+		return nil, err
+	}
 	environment.linkStringsAndConstants()
-	environment.linkSetNameToSQL()
+	if err := environment.linkSetNameToSQL(); err != nil {
+		return nil, err
+	}
 	Environments[locale] = environment
-	return
+	return environment, nil
 }
 
-// 静态初始化（读取 Constants.lua）
-var attributeConstants []property = make([]property, 0, 10)
-var raceConstants []property = make([]property, 0, 40)
-var typeConstants []property = make([]property, 0, 40)
+// AttributeConstants holds the raw attribute constants loaded from the lua file
+// (e.g. "ATTRIBUTE_DARK" → 0x1). Index-aligned with localized names from strings.conf.
+var AttributeConstants []Property
 
-func InitializeStaticEnvironment() {
-	loadLuaFile(LuaPath)
-	// register_methods
+// RaceConstants holds the raw race constants loaded from the lua file
+// (e.g. "RACE_SPELLCASTER" → 0x2). Index-aligned with localized names from strings.conf.
+var RaceConstants []Property
+
+// TypeConstants holds the raw type constants loaded from the lua file
+// (e.g. "TYPE_SYNCHRO" → 0x2000000). Index-aligned with localized names from strings.conf.
+var TypeConstants []Property
+var luaLoaded bool
+
+type constantsBundle struct {
+	attributes []Property
+	races      []Property
+	types      []Property
 }
 
-func loadLuaFile(filePath string) {
-	bytes, err := ioutil.ReadFile(filePath)
+// LoadLuaFile parses a lua constants file and populates the package-level
+// AttributeConstants, RaceConstants, and TypeConstants slices. Must be called once
+// before any Environment is created.
+func LoadLuaFile(filePath string) error {
+	if luaLoaded {
+		return fmt.Errorf("lua is already loaded")
+	}
+	bytes, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Fatal()
-		fmt.Printf("%v", err)
-		return
+		return fmt.Errorf("read lua file failed: %w", err)
 	}
 	stringFile := string(bytes[:])
-	loadLuaLines(stringFile)
+	bundle := loadLuaLines(stringFile)
+	AttributeConstants = bundle.attributes
+	RaceConstants = bundle.races
+	TypeConstants = bundle.types
+	luaLoaded = true
+	return nil
 }
 
-func loadLuaLines(stringFile string) {
+func loadLuaLines(stringFile string) constantsBundle {
+	bundle := constantsBundle{
+		attributes: make([]Property, 0, 10),
+		races:      make([]Property, 0, 40),
+		types:      make([]Property, 0, 40),
+	}
 	lines := strings.Split(stringFile, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "--") {
 			continue
 		}
-		if name, value, err := loadLuaLinePattern(line); err {
+		name, value, err := loadLuaLinePattern(line)
+		if err != nil {
 			continue
-		} else {
-			attributeConstants = checkAndAddConstant(name, value, "ATTRIBUTE_", attributeConstants)
-			raceConstants = checkAndAddConstant(name, value, "RACE_", raceConstants)
-			typeConstants = checkAndAddConstant(name, value, "TYPE_", typeConstants)
 		}
+		bundle.attributes = checkAndAddConstant(name, value, "ATTRIBUTE_", bundle.attributes)
+		bundle.races = checkAndAddConstant(name, value, "RACE_", bundle.races)
+		bundle.types = checkAndAddConstant(name, value, "TYPE_", bundle.types)
 	}
+	return bundle
 }
 
-var luaLineRegex, _ = regexp.Compile(`([A-Z_]+)\s*=\s*0x(\d+)`)
+var luaLineRegex = regexp.MustCompile(`([A-Z_]+)\s*=\s*0x([0-9a-fA-F]+)`)
 
-func loadLuaLinePattern(line string) (string, int64, bool) {
-	if match := luaLineRegex.FindStringSubmatch(line); match == nil {
-		return "", -1, true
-	} else {
-		value, _ := strconv.ParseInt(match[2], 16, 64)
-		return match[1], value, false
+func loadLuaLinePattern(line string) (string, int64, error) {
+	match := luaLineRegex.FindStringSubmatch(line)
+	if match == nil {
+		return "", -1, errors.New("not a constant line")
 	}
+	value, err := strconv.ParseInt(match[2], 16, 64)
+	if err != nil {
+		return "", -1, fmt.Errorf("parse lua constant failed: %w", err)
+	}
+	return match[1], value, nil
 }
 
-func checkAndAddConstant(name string, value int64, prefix string, target []property) []property {
+func checkAndAddConstant(name string, value int64, prefix string, target []Property) []Property {
 	if strings.HasPrefix(name, prefix) {
 		name = strings.ToLower(name[len(prefix):])
-		target = append(target, property{name: name, value: value})
+		target = append(target, Property{name: name, value: value})
 	}
 	return target
 }
 
-// 读取 strings 文件步骤
-func (environment *Environment) loadStringsFile(filePath string) {
-	bytes, err := ioutil.ReadFile(filePath)
+func (environment *Environment) loadStringsFile(filePath string) error {
+	bytes, err := os.ReadFile(filePath)
 	if err != nil {
-		fmt.Printf("%v", err)
-		return
+		return fmt.Errorf("read strings file failed: %w", err)
 	}
 	stringFile := string(bytes[:])
 	environment.loadStringsLines(stringFile)
+	return nil
 }
 
-func (environment *Environment) loadStringsLines(string_file string) {
-	lines := strings.Split(string_file, "\n")
+func (environment *Environment) loadStringsLines(stringFile string) {
+	lines := strings.Split(stringFile, "\n")
 	for _, line := range lines {
 		switch {
 		case strings.HasPrefix(line, "!system 10"):
-			if systemNumber, text, err := environment.loadStringsLinePattern(line); err {
+			systemNumber, text, err := environment.loadStringsLinePattern(line)
+			if err != nil {
 				continue
-			} else {
-				switch {
-				case isAttributeName(systemNumber):
-					environment.attributeNames = append(environment.attributeNames, text)
-				case isRaceName(systemNumber):
-					environment.raceNames = append(environment.raceNames, text)
-				case isTypeName(systemNumber):
-					environment.typeNames = append(environment.typeNames, text)
-				}
+			}
+			switch {
+			case isAttributeName(systemNumber):
+				environment.attributeNames = append(environment.attributeNames, text)
+			case isRaceName(systemNumber):
+				environment.raceNames = append(environment.raceNames, text)
+			case isTypeName(systemNumber):
+				environment.typeNames = append(environment.typeNames, text)
 			}
 		case strings.HasPrefix(line, "!setname"):
-			if setCode, setName, err := environment.loadSetnameLinePattern(line); err {
+			setCode, setName, err := environment.loadSetnameLinePattern(line)
+			if err != nil {
 				continue
-			} else {
-				environment.Sets = append(environment.Sets, createSet(setCode, setName, environment.Locale))
 			}
+			environment.Sets = append(environment.Sets, createSet(setCode, setName, environment.Locale))
 		}
 	}
 }
@@ -179,123 +249,156 @@ func isTypeName(systemNumber int64) bool {
 	return systemNumber >= 1050 && systemNumber < 1080 && systemNumber != 1053 && systemNumber != 1065
 }
 
-var stringsLineReg, _ = regexp.Compile(`!system (\d+) (.+)`)
-var setnameLineReg, _ = regexp.Compile(`!setname 0x([0-9a-fA-F]+) (.+)`)
+var stringsLineReg = regexp.MustCompile(`!system (\d+) (.+)`)
+var setnameLineReg = regexp.MustCompile(`!setname 0x([0-9a-fA-F]+) (.+)`)
 
-func (Environment) loadStringsLinePattern(line string) (int64, string, bool) {
-	if submatches := stringsLineReg.FindStringSubmatch(line); submatches == nil {
-		return 0, "", true
-	} else {
-		value, _ := strconv.ParseInt(submatches[1], 10, 0)
-		return value, submatches[2], false
+func (*Environment) loadStringsLinePattern(line string) (int64, string, error) {
+	submatches := stringsLineReg.FindStringSubmatch(line)
+	if submatches == nil {
+		return 0, "", errors.New("invalid strings line")
 	}
+	value, err := strconv.ParseInt(submatches[1], 10, 0)
+	if err != nil {
+		return 0, "", fmt.Errorf("parse strings line failed: %w", err)
+	}
+	return value, submatches[2], nil
 }
 
-func (Environment) loadSetnameLinePattern(line string) (int64, string, bool) {
-	if submatches := setnameLineReg.FindStringSubmatch(line); submatches == nil {
-		return 0, "", true
-	} else {
-		value, _ := strconv.ParseInt(submatches[1], 16, 0)
-		return value, submatches[2], false
+func (*Environment) loadSetnameLinePattern(line string) (int64, string, error) {
+	submatches := setnameLineReg.FindStringSubmatch(line)
+	if submatches == nil {
+		return 0, "", errors.New("invalid setname line")
 	}
+	value, err := strconv.ParseInt(submatches[1], 16, 0)
+	if err != nil {
+		return 0, "", fmt.Errorf("parse setname line failed: %w", err)
+	}
+	return value, submatches[2], nil
 }
 
-// 连接步骤
 func (environment *Environment) linkStringsAndConstants() {
-	environment.linkStringsAndConstantsPattern(environment.attributeNames, attributeConstants, &environment.Attributes)
-	environment.linkStringsAndConstantsPattern(environment.raceNames, raceConstants, &environment.Races)
-	environment.linkStringsAndConstantsPattern(environment.typeNames, typeConstants, &environment.Types)
-
-	// Log
+	environment.linkStringsAndConstantsPattern(environment.attributeNames, AttributeConstants, &environment.Attributes)
+	environment.linkStringsAndConstantsPattern(environment.raceNames, RaceConstants, &environment.Races)
+	environment.linkStringsAndConstantsPattern(environment.typeNames, TypeConstants, &environment.Types)
 }
 
-func (environment *Environment) linkStringsAndConstantsPattern(strings []string, constants []property, target *map[string]property) {
-	*target = make(map[string]property)
+func (environment *Environment) linkStringsAndConstantsPattern(strings []string, constants []Property, target *map[string]Property) {
+	*target = make(map[string]Property)
 	for i := 0; i < len(strings) && i < len(constants); i++ {
 		constant := constants[i]
-		(*target)[constant.name] = property{constant.name, strings[i], constant.value, environment.Locale}
+		(*target)[constant.name] = Property{constant.name, strings[i], constant.value, environment.Locale}
 	}
 }
 
-// 建立 SQL 连接
-func searchCdb(locale string) []*sql.DB {
-	if dbPath, err := filepath.Glob(filepath.Join(DatabasePath, locale, "/*.cdb")); err != nil {
-		return nil
-	} else {
-		dbs := make([]*sql.DB, 0)
-		for _, path := range dbPath {
-			if db, err := sql.Open("sqlite3", path); err != nil {
-				fmt.Printf("%v", err)
-				continue
-			} else {
-				dbs = append(dbs, db)
-			}
+func searchCdb(path string) ([]*sql.DB, error) {
+	dbPath, err := filepath.Glob(filepath.Join(path, "*.cdb"))
+	if err != nil {
+		return nil, err
+	}
+	dbs := make([]*sql.DB, 0, len(dbPath))
+	for _, path := range dbPath {
+		db, err := sql.Open("sqlite3", path)
+		if err != nil {
+			continue
 		}
-		return dbs
+		dbs = append(dbs, db)
 	}
+	if len(dbs) == 0 {
+		return nil, fmt.Errorf("no cdb found in %s", path)
+	}
+	return dbs, nil
 }
 
-// 字段探查
-func (environment *Environment) linkSetNameToSQL() {
+func (environment *Environment) linkSetNameToSQL() error {
 	for i := range environment.Sets {
 		var ids []int
 		for _, db := range environment.dbs {
-			for _, id := range getIdsBySetCode(db, environment.Sets[i].Code) {
+			setIDs, err := getIdsBySetCode(db, environment.Sets[i].Code)
+			if err != nil {
+				continue
+			}
+			for _, id := range setIDs {
 				ids = append(ids, id)
 			}
 		}
 		environment.Sets[i].Ids = ids
 	}
+	return nil
 }
 
-func getIdsBySetCode(db *sql.DB, setCode int64) []int {
+func getIdsBySetCode(db *sql.DB, setCode int64) ([]int, error) {
 	var sqlQuery string
 	if setCode < 0xFFF {
 		sqlQuery = QUERY_SET_SQL
 	} else {
 		sqlQuery = QUERY_SUBSET_SQL
 	}
-	rows, _ := db.Query(sqlQuery, setCode, setCode<<16, setCode<<32, setCode<<48)
+	rows, err := db.Query(sqlQuery, setCode, setCode<<16, setCode<<32, setCode<<48)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var ids []int
 	var id int
 	for rows.Next() {
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
 		ids = append(ids, id)
 	}
-	return ids
+	if err := rows.Err(); err != nil {
+		return ids, err
+	}
+	return ids, nil
 }
 
-// 获取卡片
+// GetCard returns the Card with the given ID for this environment.
+// It first checks the in-memory cache (environment.Cards), then falls back to
+// querying the .cdb databases. Results are cached for subsequent calls.
 func (environment *Environment) GetCard(id int) (Card, bool) {
 	if card, exist := environment.Cards[id]; exist {
 		return card, true
-	} else {
-		if card, exist = environment.generateCard(id); exist {
-			return card, true
-		} else {
-			return card, false
-		}
 	}
+	if card, exist := environment.loadCard(id); exist {
+		return card, true
+	}
+	return Card{}, false
 }
 
-// 根据名称获取卡片
+// GetNamedCard looks up a card by its exact name (or partial match as fallback)
+// across all .cdb databases for this environment.
 func (environment *Environment) GetNamedCard(name string) (Card, bool) {
 	for _, db := range environment.dbs {
-		rows, _ := db.Query(SEARCH_NAME_ACCURATE_SQL, name)
+		rows, err := db.Query(SEARCH_NAME_ACCURATE_SQL, name)
+		if err != nil {
+			continue
+		}
 		answer := rows.Next()
 		if answer {
 			var id int
-			rows.Scan(&id)
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				continue
+			}
+			rows.Close()
 			return environment.GetCard(id)
 		}
 		rows.Close()
 	}
 	for _, db := range environment.dbs {
-		rows, _ := db.Query(SEARCH_NAME_SQL, "%"+name+"%")
+		rows, err := db.Query(SEARCH_NAME_SQL, "%"+name+"%")
+		if err != nil {
+			continue
+		}
 		answer := rows.Next()
 		if answer {
 			var id int
-			rows.Scan(&id)
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				continue
+			}
+			rows.Close()
 			return environment.GetCard(id)
 		}
 		rows.Close()
@@ -303,6 +406,9 @@ func (environment *Environment) GetNamedCard(name string) (Card, bool) {
 	return Card{}, false
 }
 
+// GetNamedCardCached searches for a card by name, checking the in-memory cache first
+// (exact match, then partial match) before falling back to database queries.
+// If the cached card is an alias, the original card is returned instead.
 func (environment *Environment) GetNamedCardCached(name string) (Card, bool) {
 	for _, card := range environment.Cards {
 		if card.Name == name {
@@ -323,6 +429,8 @@ func (environment *Environment) GetNamedCardCached(name string) (Card, bool) {
 	return environment.GetNamedCard(name)
 }
 
+// GetAllNamedCard returns a Set containing all cards whose names contain the given
+// substring, searched across all .cdb databases. Returns an empty Set if name is empty.
 func (environment *Environment) GetAllNamedCard(name string) Set {
 	if len(name) == 0 {
 		return Set{}
@@ -330,22 +438,35 @@ func (environment *Environment) GetAllNamedCard(name string) Set {
 	var id int
 	var ids []int
 	for _, db := range environment.dbs {
-		rows, _ := db.Query(SEARCH_NAME_SQL, "%"+name+"%")
-		answer := rows.Next()
-		for ; answer; answer = rows.Next() {
-			rows.Scan(&id)
-			ids = append(ids, id)
+		rows, err := db.Query(SEARCH_NAME_SQL, "%"+name+"%")
+		if err != nil {
+			continue
 		}
+		answer := rows.Next()
+		for answer {
+			if err := rows.Scan(&id); err == nil {
+				ids = append(ids, id)
+			}
+			answer = rows.Next()
+		}
+		rows.Close()
 	}
-	return Set{environment.Locale, name, 0,ids, ""}
+	return Set{environment.Locale, name, 0, ids, ""}
 }
 
-func (environment *Environment) generateCard(id int) (Card, bool) {
+func (environment *Environment) loadCard(id int) (Card, bool) {
 	for _, db := range environment.dbs {
-		rows, _ := db.Query(READ_DATA_SQL, id)
+		rows, err := db.Query(READ_DATA_SQL, id)
+		if err != nil {
+			continue
+		}
 		answer := rows.Next()
 		if answer {
-			card := createCardFromData(environment.Locale, rows)
+			card, err := createCardFromData(environment.Locale, rows)
+			rows.Close()
+			if err != nil {
+				continue
+			}
 			environment.Cards[card.Id] = card
 			return card, true
 		}
@@ -354,26 +475,33 @@ func (environment *Environment) generateCard(id int) (Card, bool) {
 	return Card{}, false
 }
 
+// LoadAllCards eagerly loads all cards from all .cdb databases into the in-memory cache.
+// Subsequent GetCard calls will hit the cache without querying the database.
 func (environment *Environment) LoadAllCards() {
 	for _, db := range environment.dbs {
-		rows, _ := db.Query(READ_ALL_DATA_SQL)
+		rows, err := db.Query(READ_ALL_DATA_SQL)
+		if err != nil {
+			continue
+		}
 		for rows.Next() {
-			card := createCardFromData(environment.Locale, rows)
+			card, err := createCardFromData(environment.Locale, rows)
+			if err != nil {
+				continue
+			}
 			environment.Cards[card.Id] = card
 		}
 		rows.Close()
 	}
 }
 
+// LoadAllEnvironmentCards loads all cards for every registered Environment.
 func LoadAllEnvironmentCards() {
 	for _, environment := range Environments {
 		environment.LoadAllCards()
 	}
 }
 
-// property query
-
-func (property *property) IsAttribute(card Card) bool {
+func (property *Property) IsAttribute(card Card) bool {
 	return int64(card.Attribute)&property.value > 0
 }
 
@@ -387,7 +515,7 @@ func (card Card) IsAttribute(attributeName string) bool {
 	}
 }
 
-func (property *property) IsRace(card Card) bool {
+func (property *Property) IsRace(card Card) bool {
 	return int64(card.Race)&property.value > 0
 }
 
@@ -401,7 +529,7 @@ func (card Card) IsRace(raceName string) bool {
 	}
 }
 
-func (property *property) IsType(card Card) bool {
+func (property *Property) IsType(card Card) bool {
 	return int64(card.Type)&property.value > 0
 }
 

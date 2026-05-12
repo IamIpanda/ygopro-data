@@ -1,8 +1,8 @@
 package ygopro_data
 
 import (
-	"strings"
 	"sort"
+	"strings"
 )
 
 type Set struct {
@@ -42,7 +42,7 @@ func (set *Set) includes(id int) bool {
 func (set *Set) includeInSort(id int) bool {
 	low := 0
 	high := len(set.Ids) - 1
-	for ; low <= high; {
+	for low <= high {
 		mid := (low + high) / 2
 		if set.Ids[mid] == id {
 			return true

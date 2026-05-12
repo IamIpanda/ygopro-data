@@ -2,11 +2,11 @@ package ygopro_data
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"bytes"
 )
 
 const DECK_FILE_HEAD = "#created by lib"
@@ -22,21 +22,19 @@ type Deck struct {
 }
 
 func (deck Deck) SaveYdk(filename string) {
-	file, _ := os.Create(filename)
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "save ydk failed:", filename, "error:", err)
+		return
+	}
 	defer file.Close()
 	writer := bufio.NewWriter(file)
-	writer.WriteString(DECK_FILE_HEAD + DECK_FILE_NEWLINE)
-	writer.WriteString(DECK_FILE_MAIN_FLAG + DECK_FILE_NEWLINE)
-	for _, id := range deck.Main {
-		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
+	if _, err := writer.WriteString(deck.ToYdk()); err != nil {
+		fmt.Fprintln(os.Stderr, "write ydk failed:", filename, "error:", err)
+		return
 	}
-	writer.WriteString(DECK_FILE_SIDE_FLAG + DECK_FILE_NEWLINE)
-	for _, id := range deck.Side {
-		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
-	}
-	writer.WriteString(DECK_FILE_EX_FLAG + DECK_FILE_NEWLINE)
-	for _, id := range deck.Ex {
-		writer.WriteString(strconv.Itoa(id) + DECK_FILE_NEWLINE)
+	if err := writer.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "flush ydk failed:", filename, "error:", err)
 	}
 }
 
@@ -59,16 +57,22 @@ func (deck Deck) ToYdk() string {
 }
 
 func LoadYdk(filename string) Deck {
-	file, _ := os.Open(filename)
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load ydk failed:", filename, "error:", err)
+		return Deck{}
+	}
 	defer file.Close()
 	deck := Deck{}
+	deck.focus = &deck.Main
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		text := scanner.Text()
 		deck.loadYdkLine(text)
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading standard input:", err)
+		fmt.Fprintln(os.Stderr, "read ydk failed:", filename, "error:", err)
+		return deck
 	}
 	return deck
 }
@@ -189,7 +193,7 @@ func (deck *Deck) RemoveAliasFromCache(environment *Environment) {
 	removePackAliasFromCache(deck.Ex, environment)
 }
 
-func removePackAliasFromCache(pack []int, environment *Environment)  {
+func removePackAliasFromCache(pack []int, environment *Environment) {
 	for index, id := range pack {
 		if card, exist := environment.Cards[id]; exist {
 			if card.IsAlias() {
@@ -198,4 +202,3 @@ func removePackAliasFromCache(pack []int, environment *Environment)  {
 		}
 	}
 }
-

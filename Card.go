@@ -12,14 +12,18 @@ type Card struct {
 	Name, Desc                string
 	originLevel               int64
 	Race, Attribute, Atk, Def int
+	Strs                      [16]string
 }
 
-func createCardFromData(locale string, rows *sql.Rows) (card Card) {
-	var str1, str2, str3, str4, str5, str6, str7, str8 string
-	var str9, str10, str11, str12, str13, str14, str15, str16 string
-	rows.Scan(&card.Id, &card.Ot, &card.Alias, &card.Setcode, &card.Type, &card.Atk, &card.Def, &card.originLevel, &card.Race, &card.Attribute, &card.Category, &card.Id, &card.Name, &card.Desc, &str1, &str2, &str3, &str4, &str5, &str6, &str7, &str8, &str9, &str10, &str11, &str12, &str13, &str14, &str15, &str16)
+func createCardFromData(locale string, rows *sql.Rows) (Card, error) {
+	card := Card{}
+	err := rows.Scan(&card.Id, &card.Ot, &card.Alias, &card.Setcode, &card.Type, &card.Atk, &card.Def, &card.originLevel, &card.Race, &card.Attribute, &card.Category, &card.Id, &card.Name, &card.Desc,
+		&card.Strs[0], &card.Strs[1], &card.Strs[2], &card.Strs[3], &card.Strs[4], &card.Strs[5], &card.Strs[6], &card.Strs[7], &card.Strs[8], &card.Strs[9], &card.Strs[10], &card.Strs[11], &card.Strs[12], &card.Strs[13], &card.Strs[14], &card.Strs[15])
+	if err != nil {
+		return Card{}, err
+	}
 	card.Locale = locale
-	return
+	return card, nil
 }
 
 func (card *Card) IsAlias() bool {
@@ -44,7 +48,7 @@ func (card *Card) Level() int {
 
 func (card *Card) PendulumScale() int {
 	if card.IsType("pendulum") {
-		return int((card.originLevel - card.originLevel%65536) / 65536 / 257);
+		return int((card.originLevel - card.originLevel%65536) / 65536 / 257)
 	} else {
 		return -1
 	}
