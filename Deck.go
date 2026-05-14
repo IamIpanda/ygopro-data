@@ -56,30 +56,22 @@ func (deck Deck) ToYdk() string {
 	return writer.String()
 }
 
-func LoadYdk(filename string) Deck {
-	file, err := os.Open(filename)
+func LoadYdkFromFile(filename string) Deck {
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "load ydk failed:", filename, "error:", err)
 		return Deck{}
 	}
-	defer file.Close()
-	deck := Deck{}
-	deck.focus = &deck.Main
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		text := scanner.Text()
-		deck.loadYdkLine(text)
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "read ydk failed:", filename, "error:", err)
-		return deck
-	}
-	return deck
+	return LoadYdkFromString(string(data))
 }
 
 func LoadYdkFromString(string string) Deck {
 	string = strings.Replace(string, "\r", "", -1)
 	lines := strings.Split(string, "\n")
+	return loadYdkFromLines(lines)
+}
+
+func loadYdkFromLines(lines []string) Deck {
 	deck := Deck{}
 	deck.focus = &deck.Main
 	for _, line := range lines {

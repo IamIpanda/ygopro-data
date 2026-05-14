@@ -64,34 +64,39 @@ type Replay struct {
 }
 
 func ReadReplayFromFile(filename string) (*Replay, error) {
-	replay := new(Replay)
-	bytes, err := os.ReadFile(filename)
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("read replay failed: %w", err)
 	}
+	return ReadReplayFromBytes(data)
+}
+
+func ReadReplayFromBytes(data []byte) (*Replay, error) {
+	replay := new(Replay)
+	var err error
 	headerLength := 32
-	if len(bytes) < headerLength {
-		return nil, fmt.Errorf("too short replay header: %s", filename)
+	if len(data) < headerLength {
+		return nil, fmt.Errorf("too short replay header")
 	}
-	replay.header = readReplayHeader(bytes)
+	replay.header = readReplayHeader(data)
 	if replay.header.id != REPLAY_ID_YRP1 && replay.header.id != REPLAY_ID_YRP2 {
-		return nil, fmt.Errorf("unknown replay version: %s", filename)
+		return nil, fmt.Errorf("unknown replay version")
 	}
 	if replay.header.id == REPLAY_ID_YRP2 {
 		headerLength = 80
-		if len(bytes) < headerLength {
-			return nil, fmt.Errorf("too short replay header: %s", filename)
+		if len(data) < headerLength {
+			return nil, fmt.Errorf("too short replay header")
 		}
-		readReplayHeaderExtended(bytes, replay.header)
+		readReplayHeaderExtended(data, replay.header)
 	}
 	var content []byte
 	if replay.header.IsCompressed() {
-		content, err = readUncompressedData(bytes[headerLength:], replay.header)
+		content, err = readUncompressedData(data[headerLength:], replay.header)
 		if err != nil {
 			return nil, fmt.Errorf("uncompress replay failed: %w", err)
 		}
 	} else {
-		content = bytes[headerLength:]
+		content = data[headerLength:]
 	}
 	reader := &replayReader{content: content}
 	replay.HostName = reader.str(40)

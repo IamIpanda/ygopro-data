@@ -140,14 +140,18 @@ type constantsBundle struct {
 // AttributeConstants, RaceConstants, and TypeConstants slices. Must be called once
 // before any Environment is created.
 func LoadLuaFile(filePath string) error {
-	if luaLoaded {
-		return fmt.Errorf("lua is already loaded")
-	}
 	bytes, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("read lua file failed: %w", err)
 	}
-	stringFile := string(bytes[:])
+	return LoadLuaFromBytes(bytes)
+}
+
+func LoadLuaFromBytes(data []byte) error {
+	if luaLoaded {
+		return fmt.Errorf("lua is already loaded")
+	}
+	stringFile := string(data)
 	bundle := loadLuaLines(stringFile)
 	AttributeConstants = bundle.attributes
 	RaceConstants = bundle.races
@@ -205,7 +209,11 @@ func (environment *Environment) loadStringsFile(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("read strings file failed: %w", err)
 	}
-	stringFile := string(bytes[:])
+	return environment.loadStringsFromBytes(bytes)
+}
+
+func (environment *Environment) loadStringsFromBytes(data []byte) error {
+	stringFile := string(data)
 	environment.loadStringsLines(stringFile)
 	return nil
 }
