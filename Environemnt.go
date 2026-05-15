@@ -2,6 +2,7 @@ package ygopro_data
 
 import (
 	"database/sql"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+//go:embed constant.lua
+var embeddedConstantLua []byte
 
 // SQL 卡片查询指令
 const READ_DATA_SQL = "select * from datas join texts on datas.Id == texts.Id where datas.Id == (?)"
@@ -68,12 +72,17 @@ var Environments map[string]*Environment = make(map[string]*Environment)
 // Should point to a ygopro-database path. If set, GetEnvironment will auto try locales in that folder.
 var DatabasePath string
 
-// GetEnvironment returns the Environment for the given locale, creating it on first access.
-// It panics if LoadLuaFile has not been called first, or if DatabasePath is not set.
-func GetEnvironment(locale string) *Environment {
+func ensureLuaLoaded() {
 	if !luaLoaded {
-		panic(errors.New("environment is not initialized with a lua file, call LoadLuaFile() first"))
+		LoadLuaFromBytes(embeddedConstantLua)
 	}
+}
+
+// GetEnvironment returns the Environment for the given locale, creating it on first access.
+// If LoadLuaFile has not been called, the built-in constant.lua is loaded automatically.
+// It panics if DatabasePath is not set.
+func GetEnvironment(locale string) *Environment {
+	ensureLuaLoaded()
 
 	environment, has := Environments[locale]
 	if has {
@@ -139,7 +148,12 @@ type constantsBundle struct {
 // LoadLuaFile parses a lua constants file and populates the package-level
 // AttributeConstants, RaceConstants, and TypeConstants slices. Must be called once
 // before any Environment is created.
+//
+// If filePath is empty, the built-in constant.lua compiled into the binary is used.
 func LoadLuaFile(filePath string) error {
+	if filePath == "" {
+		return LoadLuaFromBytes(embeddedConstantLua)
+	}
 	bytes, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("read lua file failed: %w", err)
@@ -315,6 +329,18 @@ func searchCdb(path string) ([]*sql.DB, error) {
 		return nil, fmt.Errorf("no cdb found in %s", path)
 	}
 	return dbs, nil
+}
+
+// AppendCdb opens a .cdb file at the given path and appends it to the Environment's
+// database list. This allows adding extra card databases to an already-loaded
+// Environment without recreating it.
+func (environment *Environment) AppendCdb(path string) error {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return fmt.Errorf("open cdb failed: %w", err)
+	}
+	environment.dbs = append(environment.dbs, db)
+	return nil
 }
 
 func (environment *Environment) linkSetNameToSQL() error {
