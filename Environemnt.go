@@ -102,24 +102,16 @@ func GetEnvironment(locale string) *Environment {
 // LoadEnvironment creates a new Environment from the given locale directory.
 //
 // path is the full path to the locale directory containing .cdb databases and
-// a strings.conf file (e.g. "/ygopro-database/locales/zh-CN").
+// strings.conf files (e.g. "/ygopro-database/locales/zh-CN").
+// All files matching *strings.conf* in the directory are loaded and merged.
 // locale is the locale identifier (e.g. "zh-CN", "en-US").
 //
 // The returned Environment is registered in the global Environments map.
 func LoadEnvironment(path string, locale string) (*Environment, error) {
 	environment := new(Environment)
-	dbs, err := searchCdb(path)
-	if err != nil {
-		return nil, err
-	}
-	environment.dbs = dbs
 	environment.Cards = make(map[int]Card)
 	environment.Locale = locale
-	if err := environment.loadStringsFile(filepath.Join(path, "strings.conf")); err != nil {
-		return nil, err
-	}
-	environment.linkStringsAndConstants()
-	if err := environment.linkSetNameToSQL(); err != nil {
+	if err := environment.AppendFolder(path); err != nil {
 		return nil, err
 	}
 	Environments[locale] = environment
@@ -226,6 +218,19 @@ func (environment *Environment) loadStringsFile(filePath string) error {
 	return environment.loadStringsFromBytes(bytes)
 }
 
+func (environment *Environment) loadStringsFromDir(dir string) error {
+	matches, err := filepath.Glob(filepath.Join(dir, "*strings.conf*"))
+	if err != nil {
+		return err
+	}
+	for _, match := range matches {
+		if err := environment.loadStringsFile(match); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (environment *Environment) loadStringsFromBytes(data []byte) error {
 	stringFile := string(data)
 	environment.loadStringsLines(stringFile)
@@ -329,6 +334,39 @@ func searchCdb(path string) ([]*sql.DB, error) {
 		return nil, fmt.Errorf("no cdb found in %s", path)
 	}
 	return dbs, nil
+}
+
+// AppendStringsFile loads additional strings from a conf file into an already-loaded
+// Environment, then re-links the accumulated names/sets with constants and databases.
+// Use this to load extra strings.conf variants after the initial Environment creation.
+func (environment *Environment) AppendStringsFile(filePath string) error {
+	if err := environment.loadStringsFile(filePath); err != nil {
+		return err
+	}
+	environment.linkStringsAndConstants()
+	return environment.linkSetNameToSQL()
+}
+
+func (environment *Environment) AppendStringsFolder(dir string) error {
+	if err := environment.loadStringsFromDir(dir); err != nil {
+		return err
+	}
+	environment.linkStringsAndConstants()
+	return environment.linkSetNameToSQL()
+}
+
+func (environment *Environment) AppendFolder(dir string) error {
+	dbs, err := searchCdb(dir)
+	if err == nil {
+		for _, db := range dbs {
+			environment.dbs = append(environment.dbs, db)
+		}
+	}
+	if err := environment.loadStringsFromDir(dir); err != nil {
+		return err
+	}
+	environment.linkStringsAndConstants()
+	return environment.linkSetNameToSQL()
 }
 
 // AppendCdb opens a .cdb file at the given path and appends it to the Environment's
