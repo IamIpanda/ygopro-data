@@ -92,6 +92,8 @@ func (deck *Deck) loadYdkLine(text string) {
 		return
 	case len(text) == 0:
 		return
+	case text == "null":
+		return
 	default:
 		value, err := strconv.ParseInt(text, 10, 32)
 		if err != nil {

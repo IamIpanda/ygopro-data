@@ -27,7 +27,7 @@ func createCardFromData(locale string, rows *sql.Rows) (Card, error) {
 }
 
 func (card *Card) IsAlias() bool {
-	return card.Alias > 0
+	return card.Alias > 0 && card.Id-card.Alias < 100 && card.Alias-card.Id < 100
 }
 
 func (card *Card) IsOcg() bool {
